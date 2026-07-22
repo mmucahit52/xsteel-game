@@ -60,6 +60,19 @@ const THEMES = [
   {top:'#0c1616', bot:'#1e4038'}, {top:'#131022', bot:'#2c2050'},
 ];
 
+/* ---- online skor ---- */
+const API = 'https://api.xsteel.fun';
+let gtop = null, gtopErr = false, gtopLoading = false;
+function loadTop(){
+  gtopLoading = true; gtopErr = false;
+  fetch(API+'/top?game=tower&limit=10').then(r=>r.json()).then(j=>{ gtop=j.top||[]; gtopLoading=false; })
+    .catch(()=>{ gtopErr=true; gtopLoading=false; });
+}
+function submitScore(score, extra){
+  try{ fetch(API+'/score', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({game:'tower', name:playerName||'Oyuncu', score, extra})}).catch(()=>{}); }catch(e){}
+}
+
 let scene='menu', t=0, shakeA=0, buttons=[], nameInput='', toasts=[];
 function toast(m,c){ toasts.push({m, c:c||'#ffd75e', l:140}); }
 
@@ -139,6 +152,7 @@ function finish(){
   board.push({name:playerName||'Oyuncu', score:g.score, floors:g.floors.length});
   board.sort((a,b)=>b.score-a.score); board=board.slice(0,10);
   store.set('twboard',board);
+  if(g.score>0) submitScore(g.score, g.floors.length+' kat');
   scene='over';
 }
 
@@ -374,7 +388,7 @@ function drawMenu(){
   coinIcon(W/2-70, 226, 13);
   txt('Kasa: '+bank+' XSTEEL', W/2-48, 234, 20, '#ffd75e', 'left', true);
   button(W/2-130, 262, 260, 54, '▶  İNŞAATA BAŞLA', startGame, {hot:true, size:21});
-  button(W/2-130, 328, 125, 44, 'SKORLAR', ()=>scene='board');
+  button(W/2-130, 328, 125, 44, 'SKORLAR', ()=>{ scene='board'; loadTop(); });
   button(W/2+5, 328, 125, 44, 'NASIL?', ()=>scene='how');
   button(W-64, 16, 46, 38, soundOn?'♪':'✕', ()=>{soundOn=!soundOn; store.set('sound',soundOn);}, {size:16});
   button(20, 16, 150, 38, '← Oyun Merkezi', ()=>{ location.href='index.html'; }, {size:13});
@@ -428,18 +442,24 @@ function drawOver(){
 function drawBoard(){
   drawBG();
   cx.fillStyle='rgba(5,8,12,.65)'; cx.fillRect(0,0,W,H);
-  txt('EN İYİ USTALAR', W/2, 70, 36, '#e8eef7', 'center', true);
-  if(board.length===0) txt('Henüz skor yok — ilk kuleyi sen dik!', W/2, 180, 20, '#8b98aa', 'center');
-  let yy=118;
-  board.forEach((b,i)=>{
+  const online = gtop && !gtopErr;
+  txt(online? 'DÜNYA SIRALAMASI':'EN İYİ USTALAR (yerel)', W/2, 70, 32, '#e8eef7', 'center', true);
+  if(gtopLoading) txt('Yükleniyor...', W/2, 98, 15, '#8b98aa', 'center');
+  else if(gtopErr) txt('Sunucuya ulaşılamadı — yerel skorlar gösteriliyor', W/2, 98, 13, '#8b98aa', 'center');
+  const list = online? gtop.map(x=>({name:x.name, score:x.score, tag:x.extra||''}))
+                     : board.map(b=>({name:b.name, score:b.score, tag:b.floors+' kat'}));
+  if(list.length===0 && !gtopLoading) txt('Henüz skor yok — ilk kuleyi sen dik!', W/2, 180, 20, '#8b98aa', 'center');
+  let yy=130;
+  list.slice(0,10).forEach((b,i)=>{
     const col=i===0?'#ffd75e':i===1?'#c8d4e2':i===2?'#e0965a':'#9aa8ba';
     cx.fillStyle='rgba(255,255,255,'+(i%2?'.03':'.06')+')'; roundRect(220,yy-22,520,32,6); cx.fill();
     txt((i+1)+'.',245,yy,18,col,'left',true);
     txt(b.name,290,yy,18,col,'left',true);
-    txt(b.floors+' kat',600,yy,15,'#9fd0ff','left');
+    txt(b.tag,600,yy,15,'#9fd0ff','left');
     txt(b.score,715,yy,18,col,'right',true);
     yy+=36;
   });
+  txt('Senin rekorun: '+best, W/2, H-74, 15, '#8b98aa', 'center');
   button(W/2-80, H-56, 160, 40, 'GERİ', ()=>scene='menu');
 }
 
