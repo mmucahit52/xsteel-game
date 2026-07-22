@@ -146,12 +146,12 @@ function finish(){
 function update(){
   t++;
   toasts=toasts.filter(x=>(x.l--)>0);
+  if(shakeA>0){ shakeA*=0.9; if(shakeA<0.5) shakeA=0; }  // sarsıntı her ekranda sönümlensin
   if(scene!=='play') return;
 
   g.swing.ph += swingSpeed()*(g.quake>0?1.35:1);
   g.swayPh += 0.022 + g.floors.length*0.0004;
   if(g.dropLock>0) g.dropLock--;
-  if(shakeA>0) shakeA*=0.92;
 
   // kamera: kule tepesi ekranda ~260'ta kalsın
   const targetCam = Math.max(0, g.floors.length*BH - (GROUNDY-265));

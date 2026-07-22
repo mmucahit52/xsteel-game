@@ -236,6 +236,7 @@ function revive(){
 function update(){
   t++;
   toasts = toasts.filter(tt=>(tt.l--)>0);
+  if(shake>0) shake--;               // sarsıntı her ekranda sönümlensin (oyun bitti titremesi düzeltmesi)
   if(scene!=='play'||paused) return;
   const r=run;
   const sp = speedOf(r);
@@ -355,7 +356,6 @@ function update(){
   for(const x of r.texts){ x.y-=0.7; x.l--; }
   r.texts = r.texts.filter(x=>x.l>0);
   if(r.levelFlash>0) r.levelFlash--;
-  if(shake>0) shake--;
 }
 function rect(x1,y1,w1,h1,x2,y2,w2,h2){ return x1<x2+w2 && x1+w1>x2 && y1<y2+h2 && y1+h1>y2; }
 function boom(x,y,col){
