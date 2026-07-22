@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>XSTEEL Tower</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { height:100%; background:#0b0e13; overflow:hidden; font-family:'Segoe UI',Roboto,Arial,sans-serif; -webkit-user-select:none; user-select:none; }
+  #wrap { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; }
+  #game { background:#0b0e13; max-width:100%; max-height:100%; box-shadow:0 0 60px rgba(80,140,255,.15); border-radius:8px; touch-action:none; }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="game" width="960" height="540"></canvas></div>
+<script>
+"use strict";
+/* ============ XSTEEL TOWER ============ */
+const cv = document.getElementById('game');
+const cx = cv.getContext('2d');
+const W = 960, H = 540;
+const GROUNDY = H-56;
+const BW = 112, BH = 44;          // blok boyutu
+
+const mem = {};
+const store = {
+  get(k, d){ try{ const v = localStorage.getItem('xs2_'+k); return v===null ? (k in mem ? mem[k] : d) : JSON.parse(v); }catch(e){ return k in mem ? mem[k] : d; } },
+  set(k, v){ mem[k]=v; try{ localStorage.setItem('xs2_'+k, JSON.stringify(v)); }catch(e){} }
+};
+
+let bank    = store.get('bank', 0);          // Runner ile ORTAK cüzdan
+let best    = store.get('twbest', 0);
+let board   = store.get('twboard', []);
+let playerName = store.get('name', '');
+let soundOn = store.get('sound', true);
+
+/* ---- ses ---- */
+let AC=null;
+function beep(f,d,ty,v,s){ if(!soundOn) return; try{
+  if(!AC) AC=new (window.AudioContext||window.webkitAudioContext)();
+  if(AC.state==='suspended') AC.resume();
+  const o=AC.createOscillator(),g=AC.createGain();
+  o.type=ty||'square'; o.frequency.value=f;
+  if(s) o.frequency.exponentialRampToValueAtTime(s,AC.currentTime+d);
+  g.gain.value=v||0.04; g.gain.exponentialRampToValueAtTime(0.0001,AC.currentTime+d);
+  o.connect(g); g.connect(AC.destination); o.start(); o.stop(AC.currentTime+d);
+}catch(e){} }
+const sfx={
+  drop(){ beep(200,.12,'square',.04,120); },
+  land(){ beep(160,.12,'sine',.06,90); },
+  perfect(){ beep(700,.1,'square',.04,1200); setTimeout(()=>beep(1000,.12,'square',.04,1500),90); },
+  fall(){ beep(300,.4,'sawtooth',.05,70); },
+  quake(){ beep(60,.8,'sawtooth',.07,40); },
+  coin(){ beep(900,.09,'square',.03,1400); },
+};
+
+const THEMES = [
+  {top:'#0e1420', bot:'#1c2942'}, {top:'#101a26', bot:'#274a56'},
+  {top:'#170f26', bot:'#3a2a52'}, {top:'#1c1210', bot:'#4a2c1c'},
+  {top:'#0c1616', bot:'#1e4038'}, {top:'#131022', bot:'#2c2050'},
+];
+
+let scene='menu', t=0, shakeA=0, buttons=[], nameInput='', toasts=[];
+function toast(m,c){ toasts.push({m, c:c||'#ffd75e', l:140}); }
+
+let g=null;
+function newGame(){
+  return {
+    floors:[],            // {xoff}
+    swing:{ph:Math.random()*6, dir:1},
+    falling:null,         // {x,y,vy}
+    debris:[],            // düşen bloklar {x,y,vy,vx,rot,vr}
+    lives:3, perfects:0, combo:0,
+    stability:100, quake:0, quakeAt:12, nextQuakeIn:12,
+    coins:0, score:0, over:false, camY:0, swayPh:0,
+    dropLock:0,
+  };
+}
+function level(){ return g? Math.floor(g.floors.length/10)+1 : 1; }
+function swingSpeed(){ return 0.030 + Math.min(0.03, g.floors.length*0.0011); }
+function swingAmp(){ return 235 + Math.min(60, g.floors.length*1.4); }
+
+/* kule sallanma ofseti (kat i için) */
+function swayOf(i){
+  const n=g.floors.length||1;
+  const inst=(100-g.stability)/100;
+  const amp = inst*Math.min(26, n*0.5) + (g.quake>0? 18+Math.sin(t*0.9)*6 : 0);
+  return Math.sin(g.swayPh + i*0.12) * amp * (i/n);
+}
+/* kat i'nin ekran koordinatları */
+function floorPos(i){
+  const x = W/2 + g.floors[i].xoff + swayOf(i);
+  const y = GROUNDY - (i+1)*BH + g.camY;
+  return {x,y};
+}
+
+/* ---- input ---- */
+function drop(){
+  if(scene!=='play'||g.over||g.falling||g.dropLock>0) return;
+  const px = W/2 + Math.sin(g.swing.ph)*swingAmp();
+  g.falling = {x:px, y:86+g.camY*0 + 0, vy:2}; // ekran koordinatı
+  sfx.drop();
+}
+window.addEventListener('keydown', e=>{
+  if(scene==='name'){
+    if(e.key==='Backspace'){ nameInput=nameInput.slice(0,-1); e.preventDefault(); }
+    else if(e.key==='Enter'){ confirmName(); }
+    else if(e.key.length===1 && nameInput.length<12){ nameInput+=e.key; }
+    return;
+  }
+  if(e.code==='Space'||e.code==='ArrowDown'){
+    e.preventDefault();
+    if(scene==='play') drop();
+    else if(scene==='menu') startGame();
+    else if(scene==='over') startGame();
+  }
+});
+function canvasPos(e){
+  const r=cv.getBoundingClientRect();
+  return {x:((e.touches?e.touches[0].clientX:e.clientX)-r.left)*(W/r.width),
+          y:((e.touches?e.touches[0].clientY:e.clientY)-r.top)*(H/r.height)};
+}
+cv.addEventListener('pointerdown', e=>{
+  const p=canvasPos(e);
+  for(const b of buttons){ if(p.x>=b.x&&p.x<=b.x+b.w&&p.y>=b.y&&p.y<=b.y+b.h){ b.fn(); return; } }
+  if(scene==='play') drop();
+});
+function confirmName(){ playerName=(nameInput.trim()||'Oyuncu'); store.set('name',playerName); scene='menu'; }
+function startGame(){
+  if(!playerName){ nameInput=''; scene='name'; return; }
+  g=newGame(); scene='play';
+}
+function finish(){
+  g.over=true;
+  g.coins = g.floors.length*2 + g.perfects*3;
+  bank += g.coins; store.set('bank', bank);
+  g.score = g.floors.length*10 + g.perfects*25;
+  if(g.score>best){ best=g.score; store.set('twbest',best); }
+  board.push({name:playerName||'Oyuncu', score:g.score, floors:g.floors.length});
+  board.sort((a,b)=>b.score-a.score); board=board.slice(0,10);
+  store.set('twboard',board);
+  scene='over';
+}
+
+/* ---- update ---- */
+function update(){
+  t++;
+  toasts=toasts.filter(x=>(x.l--)>0);
+  if(scene!=='play') return;
+
+  g.swing.ph += swingSpeed()*(g.quake>0?1.35:1);
+  g.swayPh += 0.022 + g.floors.length*0.0004;
+  if(g.dropLock>0) g.dropLock--;
+  if(shakeA>0) shakeA*=0.92;
+
+  // kamera: kule tepesi ekranda ~260'ta kalsın
+  const targetCam = Math.max(0, g.floors.length*BH - (GROUNDY-265));
+  g.camY += (targetCam - g.camY)*0.08;
+
+  // deprem sayacı
+  if(g.quake>0){
+    g.quake--;
+    shakeA = 6;
+    if(g.quake===0){
+      // dayanıksızsa üst katlar düşer
+      if(g.stability<45 && g.floors.length>2){
+        const k = g.stability<25? 3:2;
+        for(let i=0;i<k && g.floors.length>1;i++){
+          const idx=g.floors.length-1;
+          const p=floorPos(idx);
+          g.debris.push({x:p.x,y:p.y,vx:(Math.random()-.5)*6,vy:-3,rot:0,vr:(Math.random()-.5)*0.3});
+          g.floors.pop();
+        }
+        toast('Kule hasar aldı! -'+k+' kat', '#ff7a5c'); sfx.fall();
+        g.stability=Math.min(100, g.stability+30);
+      } else {
+        toast('Kule dayandı! +50 skor', '#5dffa0');
+        g.perfects+=2; // bonus
+      }
+    }
+  } else if(g.floors.length>0 && g.floors.length % 12 === 0 && g.floors.length !== g.quakeAt){
+    g.quakeAt=g.floors.length; g.quake=200; toast('DEPREM! Kule dayanacak mı?', '#ff7a5c'); sfx.quake();
+  }
+
+  // düşen blok
+  if(g.falling){
+    g.falling.vy += 0.65; g.falling.y += g.falling.vy;
+    const topY = GROUNDY - g.floors.length*BH + g.camY;   // hedef üst yüzey
+    if(g.falling.y + BH >= topY){
+      // hedef x: son katın ekran x'i (yoksa zemin merkezi)
+      const n=g.floors.length;
+      const targetX = n===0 ? W/2 : floorPos(n-1).x;
+      const dx = g.falling.x - targetX;
+      if(Math.abs(dx) > BW*0.52){
+        // blok düştü
+        g.debris.push({x:g.falling.x, y:topY-BH, vx:dx>0?4:-4, vy:-2, rot:0, vr:dx>0?0.25:-0.25});
+        g.lives--; g.combo=0;
+        toast('Blok düştü! Kalan can: '+g.lives, '#ff7a5c'); sfx.fall(); shakeA=8;
+        if(g.lives<=0){ finish(); return; }
+      } else {
+        // yerleşti — xoff kule merkezine göre kümülatif
+        const prevOff = n===0 ? 0 : g.floors[n-1].xoff;
+        g.floors.push({xoff: prevOff + dx});
+        if(Math.abs(dx)<8){
+          g.perfects++; g.combo++;
+          g.stability=Math.min(100, g.stability+3);
+          toast(g.combo>1? 'PERFECT x'+g.combo+'!':'PERFECT!', '#5dffa0'); sfx.perfect();
+        } else {
+          g.combo=0;
+          g.stability=Math.max(0, g.stability - Math.abs(dx)/BW*22);
+          sfx.land();
+        }
+        shakeA=3;
+      }
+      g.falling=null; g.dropLock=14;
+    }
+  }
+
+  // enkaz
+  for(const d of g.debris){ d.x+=d.vx; d.y+=d.vy; d.vy+=0.5; d.rot+=d.vr; }
+  g.debris=g.debris.filter(d=>d.y<H+80);
+
+  g.score = g.floors.length*10 + g.perfects*25;
+}
+
+/* ---- draw ---- */
+function txt(s,x,y,size,col,align,bold){
+  cx.fillStyle=col||'#e8eef7'; cx.textAlign=align||'left';
+  cx.font=(bold?'800 ':'600 ')+size+'px "Segoe UI",Arial';
+  cx.fillText(s,x,y);
+}
+function roundRect(x,y,w,h,r){
+  cx.beginPath();
+  cx.moveTo(x+r,y); cx.arcTo(x+w,y,x+w,y+h,r); cx.arcTo(x+w,y+h,x,y+h,r); cx.arcTo(x,y+h,x,y,r); cx.arcTo(x,y,x+w,y,r); cx.closePath();
+}
+function button(x,y,w,h,label,fn,opts){
+  opts=opts||{};
+  const gr=cx.createLinearGradient(0,y,0,y+h);
+  gr.addColorStop(0, opts.hot?'#ff8c42':'#33465f'); gr.addColorStop(1, opts.hot?'#e05a1e':'#1e2c40');
+  cx.fillStyle=gr; roundRect(x,y,w,h,10); cx.fill();
+  cx.strokeStyle=opts.hot?'#ffb27a':'#5b7495'; cx.lineWidth=2; roundRect(x,y,w,h,10); cx.stroke();
+  txt(label, x+w/2, y+h/2+6, opts.size||18, '#f2f6fb', 'center', true);
+  buttons.push({x,y,w,h,fn});
+}
+function coinIcon(x,y,r){
+  const gr=cx.createRadialGradient(x-r/3,y-r/3,r/4,x,y,r);
+  gr.addColorStop(0,'#ffe9a0'); gr.addColorStop(1,'#e0a020');
+  cx.fillStyle=gr; cx.beginPath();
+  for(let i=0;i<6;i++){ const a=Math.PI/3*i-Math.PI/6; const px=x+Math.cos(a)*r,py=y+Math.sin(a)*r; i?cx.lineTo(px,py):cx.moveTo(px,py); }
+  cx.closePath(); cx.fill(); cx.strokeStyle='#a06a10'; cx.lineWidth=1.5; cx.stroke();
+  txt('X',x,y+r*0.42,r*1.2,'#7a4e08','center',true);
+}
+function steelBlock(x,y,w,h,hot){
+  const gr=cx.createLinearGradient(x-w/2,y,x+w/2,y+h);
+  gr.addColorStop(0,hot?'#ffb27a':'#93a7bf'); gr.addColorStop(.5,hot?'#ff8c42':'#c3d2e4'); gr.addColorStop(1,hot?'#c85a2a':'#5a7396');
+  cx.fillStyle=gr; roundRect(x-w/2,y,w,h,5); cx.fill();
+  cx.strokeStyle='rgba(0,0,0,.35)'; cx.lineWidth=2; roundRect(x-w/2,y,w,h,5); cx.stroke();
+  // perçinler
+  cx.fillStyle='rgba(20,30,45,.5)';
+  for(const px of [-w/2+12, w/2-12]) for(const py of [10, h-10]){ cx.beginPath(); cx.arc(x+px,y+py,2.6,0,7); cx.fill(); }
+  // X işareti
+  cx.strokeStyle='rgba(20,30,45,.35)'; cx.lineWidth=3;
+  cx.beginPath(); cx.moveTo(x-w/2+22,y+8); cx.lineTo(x+w/2-22,y+h-8); cx.moveTo(x+w/2-22,y+8); cx.lineTo(x-w/2+22,y+h-8); cx.stroke();
+}
+function drawBG(){
+  const th=THEMES[(level()-1)%THEMES.length];
+  const gr=cx.createLinearGradient(0,0,0,H);
+  gr.addColorStop(0,th.top); gr.addColorStop(1,th.bot);
+  cx.fillStyle=gr; cx.fillRect(0,0,W,H);
+  for(let i=0;i<26;i++){
+    cx.fillStyle='rgba(255,255,255,'+(0.05+((i*37)%10)/100)+')';
+    cx.fillRect((i*167)%W, (i*97)%240, 2, 2);
+  }
+  cx.fillStyle='rgba(220,230,250,.13)'; cx.beginPath(); cx.arc(W-120, 80, 30, 0, 7); cx.fill();
+  // bulutlar (yüksekte artar)
+  const alt=g? g.camY:0;
+  cx.fillStyle='rgba(150,170,200,.10)';
+  for(let i=0;i<5;i++){
+    const y=((i*140 + alt*0.5)%(H+80))-40;
+    cx.beginPath(); cx.ellipse((i*220+t*0.2)%(W+180)-90, y, 70, 16, 0, 0, 7); cx.fill();
+  }
+  // şehir silueti
+  cx.fillStyle='rgba(28,40,60,.6)';
+  for(let i=0;i<9;i++){
+    const bh=50+((i*67)%90);
+    cx.fillRect(i*115, GROUNDY-bh+ (g?Math.min(g.camY,140)*0.3:0), 82, bh+200);
+  }
+  // zemin
+  const gg=cx.createLinearGradient(0,GROUNDY,0,H);
+  gg.addColorStop(0,'#2c3a50'); gg.addColorStop(1,'#141c29');
+  const gy = GROUNDY + (g? g.camY:0);
+  if(gy<H){ cx.fillStyle=gg; cx.fillRect(0,gy,W,H-gy); cx.fillStyle='#4d637f'; cx.fillRect(0,gy,W,4); }
+}
+function drawCrane(){
+  // vinç kolu
+  cx.fillStyle='#3a4d68'; cx.fillRect(0, 36, W, 12);
+  for(let x=20;x<W;x+=52){
+    cx.strokeStyle='rgba(90,115,150,.5)'; cx.lineWidth=3;
+    cx.beginPath(); cx.moveTo(x,48); cx.lineTo(x+26,36); cx.lineTo(x+52,48); cx.stroke();
+  }
+  const px = W/2 + Math.sin(g.swing.ph)*swingAmp();
+  // halat
+  if(!g.falling){
+    cx.strokeStyle='#8fa8c8'; cx.lineWidth=2.5;
+    cx.beginPath(); cx.moveTo(px, 48); cx.lineTo(px, 86); cx.stroke();
+    steelBlock(px, 86, BW, BH, true);
+    // gölge hedefi
+    const n=g.floors.length;
+    const targetX = n===0? W/2 : floorPos(n-1).x;
+    const topY = GROUNDY - n*BH + g.camY;
+    cx.globalAlpha=0.18;
+    cx.fillStyle='#fff'; cx.fillRect(px-BW/2, topY-4, BW, 4);
+    cx.globalAlpha=0.3;
+    cx.strokeStyle='#5dffa0'; cx.setLineDash([6,6]); cx.lineWidth=2;
+    cx.strokeRect(targetX-BW/2, topY-BH, BW, BH); cx.setLineDash([]);
+    cx.globalAlpha=1;
+  }
+}
+function drawTower(){
+  const n=g.floors.length;
+  for(let i=0;i<n;i++){
+    const p=floorPos(i);
+    if(p.y>H+40||p.y<-BH) continue;
+    steelBlock(p.x, p.y, BW, BH, false);
+  }
+  if(g.falling) steelBlock(g.falling.x, g.falling.y, BW, BH, true);
+  for(const d of g.debris){
+    cx.save(); cx.translate(d.x,d.y+BH/2); cx.rotate(d.rot);
+    steelBlock(0,-BH/2,BW,BH,true); cx.restore();
+  }
+}
+function drawToasts(){
+  let ty=104;
+  for(const x of toasts){
+    cx.globalAlpha=Math.min(1,x.l/30);
+    cx.font='800 15px "Segoe UI"';
+    const w=cx.measureText(x.m).width+50;
+    cx.fillStyle='rgba(10,14,20,.75)'; roundRect(W/2-w/2,ty,w,30,8); cx.fill();
+    txt(x.m, W/2, ty+21, 15, x.c, 'center', true);
+    ty+=36;
+  }
+  cx.globalAlpha=1;
+}
+function drawHUD(){
+  cx.fillStyle='rgba(10,14,20,.55)'; roundRect(14,54,240,84,10); cx.fill();
+  txt('KAT  '+g.floors.length, 28, 82, 24, '#f2f6fb', 'left', true);
+  txt('SKOR '+g.score, 150, 82, 16, '#9fd0ff', 'left', true);
+  coinIcon(40, 112, 11);
+  txt('x '+(g.floors.length*2+g.perfects*3), 58, 119, 16, '#ffd75e', 'left', true);
+  txt('PERFECT: '+g.perfects, 150, 119, 14, '#5dffa0', 'left');
+  // stabilite
+  txt('DAYANIKLILIK', W-250, 74, 13, '#8b98aa', 'left', true);
+  cx.fillStyle='rgba(255,255,255,.12)'; roundRect(W-250, 82, 220, 14, 7); cx.fill();
+  const col = g.stability>60?'#5dffa0':g.stability>35?'#ffd75e':'#ff7a5c';
+  cx.fillStyle=col; roundRect(W-250, 82, 220*(g.stability/100), 14, 7); cx.fill();
+  // canlar
+  for(let i=0;i<3;i++){
+    cx.fillStyle = i<g.lives? '#ff8c42':'rgba(255,255,255,.15)';
+    cx.beginPath(); cx.arc(W-236+i*26, 116, 9, 0, 7); cx.fill();
+  }
+  txt('EN İYİ: '+best, W-30, 142, 14, '#8b98aa', 'right');
+  if(g.quake>0){
+    cx.globalAlpha=0.6+Math.sin(t*0.5)*0.3;
+    txt('⚠ DEPREM ⚠', W/2, 160, 34, '#ff7a5c', 'center', true);
+    cx.globalAlpha=1;
+  }
+}
+function drawMenu(){
+  drawBG();
+  txt('X', W/2-150, 150, 76, '#ff8c42', 'center', true);
+  txt('STEEL', W/2-8, 150, 76, '#e8eef7', 'center', true);
+  txt('TOWER', W/2+150, 150, 76, '#9fd0ff', 'center', true);
+  txt('Çelik kuleni yüksel, depreme dayan!', W/2, 190, 18, '#c8d4e2', 'center');
+  coinIcon(W/2-70, 226, 13);
+  txt('Kasa: '+bank+' XSTEEL', W/2-48, 234, 20, '#ffd75e', 'left', true);
+  button(W/2-130, 262, 260, 54, '▶  İNŞAATA BAŞLA', startGame, {hot:true, size:21});
+  button(W/2-130, 328, 125, 44, 'SKORLAR', ()=>scene='board');
+  button(W/2+5, 328, 125, 44, 'NASIL?', ()=>scene='how');
+  button(W-64, 16, 46, 38, soundOn?'♪':'✕', ()=>{soundOn=!soundOn; store.set('sound',soundOn);}, {size:16});
+  button(20, 16, 150, 38, '← Oyun Merkezi', ()=>{ location.href='index.html'; }, {size:13});
+  txt(playerName? 'Usta: '+playerName+'  •  Rekor: '+best:'', W/2, 420, 15, '#8b98aa', 'center');
+  txt('Bloğu bırakmak için tıkla ya da SPACE', W/2, 452, 15, '#66788f', 'center');
+  // örnek kule
+  for(let i=0;i<4;i++) steelBlock(120+Math.sin(i*1.2)*6, GROUNDY-(i+1)*BH, BW*0.8, BH*0.9, false);
+  for(let i=0;i<6;i++) steelBlock(W-140+Math.sin(i*0.9)*5, GROUNDY-(i+1)*BH*0.9, BW*0.7, BH*0.8, false);
+}
+function drawHow(){
+  drawBG();
+  cx.fillStyle='rgba(5,8,12,.7)'; cx.fillRect(0,0,W,H);
+  txt('NASIL OYNANIR?', W/2, 80, 34, '#e8eef7', 'center', true);
+  const lines=[
+    ['1.','Vinçteki blok sağa sola sallanır. Tam zamanında TIKLA ve bırak.'],
+    ['2.','Alttaki bloğun tam üstüne denk getir. Tam hizalı = PERFECT (+25 skor, dayanıklılık artar).'],
+    ['3.','Kaydırırsan kule sallanmaya başlar ve DAYANIKLILIK düşer.'],
+    ['4.','Her 12 katta DEPREM olur — dayanıklılık düşükse üst katlar yıkılır!'],
+    ['5.','Bloğu tamamen kaçırırsan can gidersin. 3 can bitince oyun biter.'],
+    ['6.','Her kat = 2 XSTEEL, her PERFECT = +3 XSTEEL. Cüzdan Runner ile ortak!'],
+  ];
+  let yy=130;
+  for(const [n,s] of lines){
+    txt(n, 180, yy, 18, '#ff8c42', 'left', true);
+    txt(s, 210, yy, 16, '#c8d4e2', 'left');
+    yy+=46;
+  }
+  button(W/2-80, H-70, 160, 44, 'ANLADIM', ()=>scene='menu', {hot:true});
+}
+function drawName(){
+  drawBG();
+  txt('İsmini yaz', W/2, 190, 34, '#e8eef7', 'center', true);
+  cx.fillStyle='rgba(255,255,255,.06)'; roundRect(W/2-160,220,320,54,10); cx.fill();
+  cx.strokeStyle='#5b7495'; roundRect(W/2-160,220,320,54,10); cx.stroke();
+  txt(nameInput+(Math.floor(t/30)%2?'|':''), W/2, 256, 26, '#ffd75e', 'center', true);
+  button(W/2-100, 300, 200, 48, 'DEVAM', confirmName, {hot:true});
+}
+function drawOver(){
+  drawBG();
+  cx.fillStyle='rgba(5,8,12,.72)'; cx.fillRect(0,0,W,H);
+  txt('İNŞAAT BİTTİ', W/2, 140, 48, '#ff7a5c', 'center', true);
+  txt(g.floors.length+' kat  •  Skor: '+g.score, W/2, 196, 26, '#f2f6fb', 'center', true);
+  coinIcon(W/2-96, 234, 12);
+  txt('+'+g.coins+' XSTEEL kazandın', W/2-74, 242, 20, '#ffd75e', 'left', true);
+  txt('PERFECT: '+g.perfects, W/2, 278, 17, '#5dffa0', 'center');
+  if(g.score>=best && best>0) txt('🏆 YENİ REKOR!', W/2, 308, 20, '#ffd75e', 'center', true);
+  button(W/2-190, 336, 180, 52, 'TEKRAR İNŞA ET', startGame, {hot:true, size:16});
+  button(W/2+10, 336, 180, 52, 'ANA MENÜ', ()=>scene='menu');
+  drawToasts();
+}
+function drawBoard(){
+  drawBG();
+  cx.fillStyle='rgba(5,8,12,.65)'; cx.fillRect(0,0,W,H);
+  txt('EN İYİ USTALAR', W/2, 70, 36, '#e8eef7', 'center', true);
+  if(board.length===0) txt('Henüz skor yok — ilk kuleyi sen dik!', W/2, 180, 20, '#8b98aa', 'center');
+  let yy=118;
+  board.forEach((b,i)=>{
+    const col=i===0?'#ffd75e':i===1?'#c8d4e2':i===2?'#e0965a':'#9aa8ba';
+    cx.fillStyle='rgba(255,255,255,'+(i%2?'.03':'.06')+')'; roundRect(220,yy-22,520,32,6); cx.fill();
+    txt((i+1)+'.',245,yy,18,col,'left',true);
+    txt(b.name,290,yy,18,col,'left',true);
+    txt(b.floors+' kat',600,yy,15,'#9fd0ff','left');
+    txt(b.score,715,yy,18,col,'right',true);
+    yy+=36;
+  });
+  button(W/2-80, H-56, 160, 40, 'GERİ', ()=>scene='menu');
+}
+
+function frame(){
+  update();
+  buttons=[];
+  cx.save();
+  if(shakeA>0.5) cx.translate((Math.random()-.5)*shakeA,(Math.random()-.5)*shakeA);
+  if(scene==='play'){ drawBG(); drawTower(); drawCrane(); drawHUD(); drawToasts(); }
+  else if(scene==='menu') drawMenu();
+  else if(scene==='how') drawHow();
+  else if(scene==='name') drawName();
+  else if(scene==='over') drawOver();
+  else if(scene==='board') drawBoard();
+  cx.restore();
+  requestAnimationFrame(frame);
+}
+frame();
+</script>
+</body>
+</html>
