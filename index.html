@@ -116,13 +116,13 @@ function newRun(){
     pMagnet:0, pX2:0,           // süreli power-uplar (frame)
     combo:0, comboT:0, bestCombo:0,
     obs:[], toks:[], pows:[], parts:[], texts:[],
-    spawnO: 100, spawnC: 60, spawnP: 700,
+    spawnO: 170, spawnC: 60, spawnP: 700,
     levelFlash:0, dead:false, revived:false,
     powerups:0,
   };
 }
-const LEVEL_DIST = 400;
-function speedOf(r){ return Math.min(11.5, 4.4 + (r.level-1)*0.55); }
+const LEVEL_DIST = 500;
+function speedOf(r){ return Math.min(9.2, 3.6 + (r.level-1)*0.38); }
 function multOf(r){ return Math.min(5, 1 + Math.floor(r.combo/5)); }
 
 /* ---- input ---- */
@@ -256,19 +256,19 @@ function update(){
   if(r.pX2>0) r.pX2--;
   if(r.comboT>0){ r.comboT--; if(r.comboT===0) r.combo=0; }
 
-  // ---- spawn: engeller (level 1 kolay) ----
+  // ---- spawn: engeller (mesafe hıza göre sabit — her zaman tepki payı var) ----
   if(--r.spawnO<=0){
-    const base = Math.max(70, 150 - r.level*9);
-    r.spawnO = base + Math.random()*70;
+    const gapPx = Math.max(430, 640 - r.level*22) + Math.random()*260; // engeller arası piksel
+    r.spawnO = gapPx / sp;
     const roll = Math.random();
     if(r.level===1){
       if(roll<0.6) r.obs.push({k:'spike', x:W+40, y:GROUND+40, w:40, h:30});
       else r.obs.push({k:'crate', x:W+40, y:GROUND+40, w:44, h:44});
     } else {
-      if(roll<0.36) r.obs.push({k:'spike', x:W+40, y:GROUND+40, w:44, h:34});
-      else if(roll<0.62) r.obs.push({k:'crate', x:W+40, y:GROUND+40, w:46, h:46 + (r.level>=3 && Math.random()<0.4?38:0)});
-      else if(roll<0.85) r.obs.push({k:'drone', x:W+40, y:GROUND- (Math.random()<0.5?4:38), w:50, h:24, ph:Math.random()*6});
-      else r.obs.push({k:'saw', x:W+40, y:GROUND+40, rr:24, w:48, h:44, rot:0});
+      if(roll<0.4) r.obs.push({k:'spike', x:W+40, y:GROUND+40, w:44, h:32});
+      else if(roll<0.68) r.obs.push({k:'crate', x:W+40, y:GROUND+40, w:46, h:46 + (r.level>=4 && Math.random()<0.35?36:0)});
+      else if(roll<0.9) r.obs.push({k:'drone', x:W+40, y:GROUND- (Math.random()<0.5?4:38), w:50, h:24, ph:Math.random()*6});
+      else r.obs.push({k:'saw', x:W+40, y:GROUND+40, rr:22, w:44, h:40, rot:0});
     }
   }
   // coinler
@@ -298,7 +298,7 @@ function update(){
     if(o.k==='drone'){ o.ph+=0.07; o.yv=Math.sin(o.ph)*9; }
     if(o.k==='saw'){ o.rot+=0.3; }
     const oy = o.k==='drone' ? o.y+o.yv-o.h : o.y-o.h;
-    if(rect(pb.x,pb.y,pb.w,pb.h, o.x-o.w/2+4, oy+4, o.w-8, o.h-8)){
+    if(rect(pb.x,pb.y,pb.w,pb.h, o.x-o.w/2+6, oy+6, o.w-12, o.h-10)){
       if(r.inv>0) continue;
       if(r.shield){ r.shield=false; r.inv=70; boom(o.x, oy+o.h/2, '#9fd0ff'); o.x=-999; sfx.hit(); continue; }
       boom(r.px, r.py, '#ff7a5c'); endRun(false); return;
