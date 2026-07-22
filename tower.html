@@ -77,7 +77,7 @@ function newGame(){
   };
 }
 function level(){ return g? Math.floor(g.floors.length/10)+1 : 1; }
-function swingSpeed(){ return 0.030 + Math.min(0.03, g.floors.length*0.0011); }
+function swingSpeed(){ return 0.025 + Math.min(0.022, g.floors.length*0.0008); }
 function swingAmp(){ return 235 + Math.min(60, g.floors.length*1.4); }
 
 /* kule sallanma ofseti (kat i için) */
@@ -443,8 +443,7 @@ function drawBoard(){
   button(W/2-80, H-56, 160, 40, 'GERİ', ()=>scene='menu');
 }
 
-function frame(){
-  update();
+function render(){
   buttons=[];
   cx.save();
   if(shakeA>0.5) cx.translate((Math.random()-.5)*shakeA,(Math.random()-.5)*shakeA);
@@ -455,9 +454,17 @@ function frame(){
   else if(scene==='over') drawOver();
   else if(scene==='board') drawBoard();
   cx.restore();
+}
+/* Sabit zaman adımı: oyun her monitörde (60/120/144Hz) AYNI hızda çalışır */
+const STEP = 1000/60;
+let lastT = performance.now(), acc = 0;
+function frame(now){
+  acc += Math.min(120, now - lastT); lastT = now;
+  while(acc >= STEP){ update(); acc -= STEP; }
+  render();
   requestAnimationFrame(frame);
 }
-frame();
+requestAnimationFrame(frame);
 </script>
 </body>
 </html>

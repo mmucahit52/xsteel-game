@@ -758,8 +758,7 @@ function drawBoard(){
 }
 
 /* ---- main loop ---- */
-function frame(){
-  update();
+function render(){
   buttons=[];
   cx.save();
   if(shake>0) cx.translate((Math.random()-.5)*shake, (Math.random()-.5)*shake);
@@ -776,9 +775,17 @@ function frame(){
   else if(scene==='board') drawBoard();
   else if(scene==='missions') drawMissions();
   cx.restore();
+}
+/* Sabit zaman adımı: oyun her monitörde (60/120/144Hz) AYNI hızda çalışır */
+const STEP = 1000/60;
+let lastT = performance.now(), acc = 0;
+function frame(now){
+  acc += Math.min(120, now - lastT); lastT = now;
+  while(acc >= STEP){ update(); acc -= STEP; }
+  render();
   requestAnimationFrame(frame);
 }
-frame();
+requestAnimationFrame(frame);
 </script>
 </body>
 </html>
